@@ -1,15 +1,19 @@
 {
   "name": "nocap",
   "version": "0.1.0",
-  "private": true,
+  "description": "Your coding agent said \"all tests pass.\" Was that cap? Audits Claude Code and Codex transcripts for unbacked claims and hidden test failures.",
+  "license": "MIT",
   "type": "module",
   "engines": {"node": ">=20"},
   "main": "dist/audit.js",
   "types": "dist/audit.d.ts",
   "exports": "./dist/audit.js",
+  "bin": {"nocap": "dist/audit.js"},
+  "files": ["dist/audit.js", "dist/audit.d.ts"],
   "scripts": {
     "build": "tsc",
-    "test": "npm run build && node --test dist/audit.test.js"
+    "test": "npm run build && node --test dist/audit.test.js",
+    "release": "npm run build && mkdir -p release && cp dist/audit.js release/nocap.mjs"
   },
   "devDependencies": {"@types/node": "26.6.1", "typescript": "5.9.3"}
 }
