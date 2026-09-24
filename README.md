@@ -1,3 +1,5 @@
+<p align="center"><img src="https://raw.githubusercontent.com/SuperLogicAI/nocap/master/assets/nocap.gif" alt="A glitching cap between the words No Cap" width="800"></p>
+
 # nocap 🧢
 
 **Your coding agent said "all tests pass." Was that cap?**
