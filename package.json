@@ -1,6 +1,6 @@
 {
   "name": "agent-nocap",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Your coding agent said \"all tests pass.\" Was that cap? Audits Claude Code and Codex transcripts for unbacked claims and hidden test failures.",
   "license": "MIT",
   "repository": {"type": "git", "url": "git+https://github.com/SuperLogicAI/agent-nocap.git"},

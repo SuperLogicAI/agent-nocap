@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { auditSteps, claudeSteps, codexSteps, pipefailCommand, sessionTags } from './audit.js';
+import { auditFiles, auditSteps, auditText, claudeSteps, codexSteps, pipefailCommand, sessionTags } from './audit.js';
 const jsonl = (...events: unknown[]) => events.map(e => JSON.stringify(e)).join('\n');
 const user = (text: string) => ({ type: 'user', timestamp: 't', message: { content: text } });
 const bash = (id: string, command: string) => ({ type: 'assistant', timestamp: 't', message: { content: [{ type: 'tool_use', id, name: 'Bash', input: { command } }] } });
@@ -51,4 +51,15 @@ test('pipefail hook rewrites only piped checks', () => {
     assert.equal(pipefailCommand('cd app && cargo test | grep FAILED'), 'set -o pipefail; cd app && cargo test | grep FAILED');
     for (const cmd of ['npm test', 'npm test || true', 'npm test |& tail', 'ls | head', 'set -o pipefail; npm test | tail'])
         assert.equal(pipefailCommand(cmd), undefined, cmd);
+});
+
+test('auditText colors only non-zero numbers, and only when asked', () => {
+    const a = auditFiles([]);
+    a.verdicts.contradicted = 2; a.maskedFailures = 3;
+    assert.doesNotMatch(auditText(a, 0), /\x1b/);
+    assert.match(auditText(a, 0), /Agent-nocap by \/\/Super Logic AI · github\.com\/SuperLogicAI\/agent-nocap/);
+    const colored = auditText(a, 0, true);
+    assert.match(colored, /contradicted  \x1b\[31m2\x1b\[0m/);
+    assert.match(colored, /  backed        0\t/);
+    assert.match(colored, /pipefail hook/);
 });

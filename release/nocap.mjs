@@ -200,18 +200,24 @@ export function transcriptFiles(sinceDays, filter, home = homedir()) {
     walk(join(process.env.CODEX_HOME ?? join(home, '.codex'), 'sessions'), 'codex');
     return out;
 }
-export function auditText(a, examples) {
+export function auditText(a, examples, color = false) {
+    // ANSI only for non-zero numbers worth a glance: green good, yellow doubtful, red bad.
+    const paint = (code, n) => color && n ? `\x1b[${code}m${n}\x1b[0m` : String(n), dim = (s) => color ? `\x1b[2m${s}\x1b[0m` : s;
+    // Bold brand mark; slash colors 24-bit where the terminal says it supports it, nearest 256-color otherwise.
+    const rgb = (hex, fallback, s) => !color ? s
+        : /truecolor|24bit/.test(process.env.COLORTERM ?? '') ? `\x1b[1;38;2;${hex.match(/../g).map(h => parseInt(h, 16)).join(';')}m${s}\x1b[0m` : `\x1b[1;38;5;${fallback}m${s}\x1b[0m`;
+    const brand = rgb('00D09B', 43, '/') + rgb('FF7E1B', 208, '/') + (color ? '\x1b[1mSuper Logic AI\x1b[0m' : 'Super Logic AI');
     const pct = (n) => a.claims ? `${Math.round(100 * n / a.claims)}%` : '0%';
     const rows = [
         `Scanned ${a.sessions} agent sessions.`,
         ``,
         `Agents claimed "tests pass / build clean / verified" ${a.claims} times:`,
-        `  backed        ${a.verdicts.backed}\t(${pct(a.verdicts.backed)})  a passing check ran after the last edit`,
-        `  unbacked      ${a.verdicts.unbacked}\t(${pct(a.verdicts.unbacked)})  no check ran in that turn`,
-        `  contradicted  ${a.verdicts.contradicted}\t(${pct(a.verdicts.contradicted)})  the last check in that turn failed`,
-        `  stale         ${a.verdicts.stale}\t(${pct(a.verdicts.stale)})  code was edited after the last passing check`,
+        `  backed        ${paint(32, a.verdicts.backed)}\t(${pct(a.verdicts.backed)})  a passing check ran after the last edit`,
+        `  unbacked      ${paint(33, a.verdicts.unbacked)}\t(${pct(a.verdicts.unbacked)})  no check ran in that turn`,
+        `  contradicted  ${paint(31, a.verdicts.contradicted)}\t(${pct(a.verdicts.contradicted)})  the last check in that turn failed`,
+        `  stale         ${paint(33, a.verdicts.stale)}\t(${pct(a.verdicts.stale)})  code was edited after the last passing check`,
         ``,
-        `Checks run: ${a.verifications}, failed: ${a.failedVerifications}, failures hidden by "| tail"-style pipes: ${a.maskedFailures}`,
+        `Checks run: ${a.verifications}, failed: ${a.failedVerifications}, failures hidden by "| tail"-style pipes: ${paint(31, a.maskedFailures)}`,
         `Retry loops (same command failed 3+ times in a session): ${a.retryLoops}`,
     ];
     const groups = Object.entries(a.byTags).filter(([, g]) => g.checks || g.claims).sort(([x], [y]) => x.localeCompare(y));
@@ -219,7 +225,9 @@ export function auditText(a, examples) {
         rows.push('', 'By host and active plugins (sessions with checks or claims):', ...groups.map(([k, g]) => `  ${k.padEnd(28)} ${g.sessions} sessions, ${g.checks} checks, ${g.failed} failed, ${g.masked} hidden by pipes, ${g.claims} claims (${g.backed} backed)`));
     if (examples > 0 && a.findings.length)
         rows.push('', 'Most recent unsupported claims:', ...a.findings.slice(0, examples).flatMap(f => [`  [${f.verdict}] ${f.at.slice(0, 16)} ${basename(f.file)}`, `    "${f.text.replace(/\s+/g, ' ')}"`, ...(f.evidence ? [`    last check ${f.evidence.replace(/\s+/g, ' ')}`] : [])]));
-    rows.push('', 'Heuristic audit of local transcripts. Nothing left this machine.');
+    if (a.maskedFailures)
+        rows.push('', 'Stop pipes hiding failures: the pipefail hook adds `set -o pipefail` to piped checks. See the README.');
+    rows.push('', dim('Heuristic audit of local transcripts. Nothing left this machine.'), dim('Agent-nocap by ') + brand + dim(' · github.com/SuperLogicAI/agent-nocap'));
     return rows.join('\n');
 }
 // Standalone entry: `node nocap.mjs` or the `nocap` bin (realpath: npx runs it through a .bin symlink). Summary only by default, because examples quote conversation text.
@@ -239,6 +247,6 @@ if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.me
     const since = Number(values.since ?? 30), examples = Number(values.examples ?? 0);
     const audit = auditFiles(transcriptFiles(since, values.project));
     console.log(values.format === 'json' ? JSON.stringify({ ...audit, findings: examples ? audit.findings.slice(0, examples) : [] }, null, 2)
-        : `nocap 0.1 · last ${since} days · node ${process.versions.node} · ${process.platform}\n\n${auditText(audit, examples)}`);
+        : `nocap 0.1 · last ${since} days · node ${process.versions.node} · ${process.platform}\n\n${auditText(audit, examples, !!process.stdout.isTTY && !process.env.NO_COLOR)}`);
 }
 //# sourceMappingURL=audit.js.map

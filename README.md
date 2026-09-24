@@ -31,7 +31,10 @@ By host and active plugins (sessions with checks or claims):
   claude: other-hooks          842 sessions, 0 checks, 0 failed, 0 hidden by pipes, 1 claims (0 backed)
   codex: none                  161 sessions, 588 checks, 42 failed, 2 hidden by pipes, 35 claims (30 backed)
 
+Stop pipes hiding failures: the pipefail hook adds `set -o pipefail` to piped checks. See the README.
+
 Heuristic audit of local transcripts. Nothing left this machine.
+Agent-nocap by //Super Logic AI · github.com/SuperLogicAI/agent-nocap
 ```
 
 31 claims not backed by a passing check. 38 of 98 failed checks exited 0 because of a pipe.
