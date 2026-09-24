@@ -39,8 +39,8 @@ Heuristic audit of local transcripts. Nothing left this machine.
 ## Run it
 
 ```sh
-npx nocap              # last 30 days, counts only
-npx nocap --since 90   # longer window
+npx @superlogicai/nocap              # last 30 days, counts only
+npx @superlogicai/nocap --since 90   # longer window
 ```
 
 Requires Node 20+.
@@ -56,7 +56,7 @@ Requires Node 20+.
 
 Paste into Claude Code:
 
-> Run `npx -y nocap` and show me the summary exactly as printed. Don't use `--examples`. Then install the nocap pipefail hook: run `npm i -g nocap` and add a `PreToolUse` hook to `~/.claude/settings.json` with matcher `Bash` and command `nocap hook`. Merge it with any hooks already there, and show me the diff before saving.
+> Run `npx -y @superlogicai/nocap` and show me the summary exactly as printed. Don't use `--examples`. Then install the nocap pipefail hook: run `npm i -g @superlogicai/nocap` and add a `PreToolUse` hook to `~/.claude/settings.json` with matcher `Bash` and command `nocap hook`. Merge it with any hooks already there, and show me the diff before saving.
 
 For Codex, use the first sentence only. The hook is Claude Code only for now.
 
@@ -71,7 +71,7 @@ The default output contains counts only, no code or conversation text. `--exampl
 The fix for piped checks is `set -o pipefail`. nocap ships a Claude Code `PreToolUse` hook that adds it to test, lint, typecheck and build commands that pipe their output. Everything else passes through untouched, and any error leaves the command as it was. Like the audit, it makes no model calls and adds nothing to your prompt. The only visible change is a failing exit code where a pipe used to hide one.
 
 ```sh
-npm i -g nocap
+npm i -g @superlogicai/nocap
 ```
 
 Then in `~/.claude/settings.json`:
