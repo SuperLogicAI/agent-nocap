@@ -1,12 +1,12 @@
 <p align="center"><img src="https://raw.githubusercontent.com/SuperLogicAI/agent-nocap/master/assets/nocap.gif" alt="A glitching cap between the words No Cap" width="800"></p>
 
-# nocap 🧢
+# agent-nocap 🧢
 
 **Your coding agent said "all tests pass." Was that cap?**
 
 <sub>For everyone over 30: "no cap" is slang for "no lie." So: is your coding agent lying when it says the tests pass?</sub>
 
-nocap reads your local Claude Code and Codex history and checks every "tests pass", "build clean" and "verified" claim against the commands the agent actually ran. It also finds failed checks that looked green because the output went through a pipe (`npm test | tail`), which throws away the exit code.
+agent-nocap reads your local Claude Code and Codex history and checks every "tests pass", "build clean" and "verified" claim against the commands the agent actually ran. It also finds failed checks that looked green because the output went through a pipe (`npm test | tail`), which throws away the exit code.
 
 - **Zero tokens.** No model calls, no prompt, no skill loaded into your agent's context. It's a plain Node script that reads files.
 - **Deterministic.** Pattern matching, not an LLM judge. Same transcripts in, same numbers out, every run.
