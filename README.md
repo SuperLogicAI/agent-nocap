@@ -17,21 +17,22 @@ agent-nocap reads your local Claude Code and Codex history and checks every "tes
 The author's own last 30 days, default output (version line trimmed):
 
 ```
-Scanned 1533 agent sessions.
+Scanned 1525 agent sessions; 148 ran checks or made claims.
 
-Agents claimed "tests pass / build clean / verified" 221 times:
-  backed        175	(79%)  a matching check passed after the last edit
-  unbacked      32	(14%)  no matching check with a known result in that turn
-  contradicted  11	(5%)  the last matching check in that turn failed
-  stale         3	(1%)  code was edited after the last passing check
+Agents claimed "tests pass / build clean / verified" 226 times:
+  backed        207	(92%)  a matching check passed after the last edit
+  unbacked      9	(4%)  no matching check with a known result before it
+  contradicted  8	(4%)  the last matching check before it failed
+  stale         2	(1%)  code was edited after the last passing check
 
-Checks run: 822, failed: 93, failures hidden by "| tail"-style pipes: 34
-Retry loops (same command failed 3+ times in a session): 6
+Checks run: 1201, failed: 149, failures hidden by "| tail"-style pipes: 26
+Retry loops (same command failed 3+ times in a session): 9
 
-By host and active plugins (groups with checks or claims):
-  claude: caveman+ponytail     514 sessions, 568 checks, 49 failed, 34 hidden by pipes, 184 claims (158 backed)
-  claude: other-hooks          822 sessions, 0 checks, 0 failed, 0 hidden by pipes, 1 claims (0 backed)
-  codex: none                  162 sessions, 254 checks, 44 failed, 0 hidden by pipes, 36 claims (17 backed)
+By host and active plugins (sessions that ran checks or made claims):
+  claude: caveman+ponytail     93 sessions, 629 checks, 38 failed, 25 hidden by pipes, 193 claims (183 backed)
+  claude: none                 3 sessions, 10 checks, 1 failed, 1 hidden by pipes, 0 claims (0 backed)
+  claude: other-hooks          1 sessions, 0 checks, 0 failed, 0 hidden by pipes, 1 claims (0 backed)
+  codex: none                  51 sessions, 562 checks, 110 failed, 0 hidden by pipes, 32 claims (24 backed)
 
 Stop pipes hiding failures: the pipefail hook adds `set -o pipefail` to piped checks. See the README.
 
@@ -39,11 +40,11 @@ Heuristic audit of local transcripts. Nothing left this machine.
 Agent-nocap by //Super Logic AI · github.com/SuperLogicAI/agent-nocap
 ```
 
-46 claims not backed by a passing check. 34 of 93 failed checks exited 0 because of a pipe.
+19 claims not backed by a passing check. 26 of 149 failed checks exited 0 because of a pipe.
 
-Version 0.1 put the same history at 85% backed. It let a passing lint back "all tests pass", counted `grep jest` as a test run, and scored Codex scripts that dropped their exit code as passes, including ones whose output said `1 failed`. 0.2 fixes all three.
+Version 0.1 put the same history at 85% backed. It let a passing lint back "all tests pass", counted `grep jest` as a test run, and scored Codex scripts that dropped their exit code as passes, including ones whose output said `1 failed`. 0.2 fixed all three and swung too strict, at 78%: it counted ESLint warnings as failures, read quoted claims as the agent's own, and couldn't see the exit code of most Codex checks. 0.3 fixes those. It reads the exit codes Codex logs for every command, and a passing check now backs a claim until the next code edit, even across turns.
 
-**About these numbers:** one developer's machine, so read them as an anecdote, not a benchmark. Claude Code ran with the [caveman](https://github.com/JuliusBrussee/caveman) and [ponytail](https://github.com/DietrichGebert/ponytail) plugins, which inject instructions through hooks. Codex ran with none. The two hosts got different work, so the split isn't a Claude vs Codex comparison. `other-hooks` means Claude sessions with other hooks active and no checks at all. Plugins are detected from hook context only, never from what you type. The table above is the only thing that left the machine to make this README: counts, no transcript text.
+**About these numbers:** one developer's machine, so read them as an anecdote, not a benchmark. Claude Code ran with the [caveman](https://github.com/JuliusBrussee/caveman) and [ponytail](https://github.com/DietrichGebert/ponytail) plugins, which inject instructions through hooks. Codex ran with none. The two hosts got different work, so the split isn't a Claude vs Codex comparison. `other-hooks` means Claude sessions with other hooks active, and `none` means no hook context at all, which includes subagents. Most scanned sessions were one-shot SDK calls with no commands, so they're scanned but left out of the counts. Plugins are detected from hook context only, never from what you type. The table above is the only thing that left the machine to make this README: counts, no transcript text.
 
 ## Run it
 
@@ -71,7 +72,7 @@ For Codex, use the first sentence only. The hook is Claude Code only for now.
 
 ## Private by design
 
-One ~20 KB file, Node built-ins only, no dependencies, no network. It reads `~/.claude/projects` and `~/.codex/sessions` (or `CLAUDE_CONFIG_DIR` / `CODEX_HOME`) and prints counts. Skim `dist/audit.js` before you run it.
+One ~22 KB file, Node built-ins only, no dependencies, no network. It reads `~/.claude/projects` and `~/.codex/sessions` (or `CLAUDE_CONFIG_DIR` / `CODEX_HOME`) and prints counts. Skim `dist/audit.js` before you run it.
 
 The default output contains counts only, no code or conversation text. `--examples` quotes your sessions: check what's in it before sharing.
 
@@ -97,9 +98,9 @@ Then in `~/.claude/settings.json`:
 
 ## How it decides
 
-Claim detection is heuristic: regex over the agent's messages, with a negation filter ("should pass", "once tests pass" don't count). Each claim needs a check of the kind it names: "tests pass" needs a test run (`npm test`, `pytest`, `cargo test`, `go test`, …), "tsc clean" a typecheck, "lint clean" a linter, "build passes" a build. "Verified" or "everything works" accepts any check, and aggregate scripts like `npm run check` back any claim. A claim is **backed** only if the last matching check in that turn passed and no code was edited after it.
+Claim detection is heuristic: regex over the agent's messages, with a negation filter ("should pass", "once tests pass", "4/5 tests passed" don't count). Quoted text, inline code and code blocks are skipped, because they're usually someone else's words. Each claim needs a check of the kind it names: "tests pass" needs a test run (`npm test`, `pytest`, `cargo test`, `go test`, …), "tsc clean" a typecheck, "lint clean" a linter, "build passes" a build. "Verified working" or "everything works" accepts any check, and check scripts like `npm run check` or `npm run e2e:check` back any claim. A claim is **backed** only if the last matching check before it in the session passed and no code was edited after it. A user message doesn't reset that: "all tests pass, committing" right after a passing run is backed.
 
-A command counts as a check only where it starts, so `echo "npm test"` and `grep jest` don't. A check without a known result is never a pass: background runs, and Codex scripts that print the output but drop the exit code. Failure text in that output still counts as a failure. A piped check counts as failed when it exits 0 but its output shows failures. Edits to Markdown and text files don't count as code edits. `--since` counts claims and checks by when they happened, not by file date.
+A command counts as a check only where it starts, so `echo "npm test"` and `grep jest` don't. A check without a known result is never a pass: background runs, commands that you or a hook blocked, and scripts in older Codex sessions that print the output but drop the exit code (failure text in that output still counts as a failure). Newer Codex logs every command's exit code, and nocap reads it. A piped check counts as failed when it exits 0 but its output shows failures; ESLint's warnings-only summary doesn't count. Edits to Markdown and text files don't count as code edits. Subagent transcripts count as their own sessions. `--since` counts claims and checks by when they happened, not by file date.
 
 Expect some false positives. If nocap flags something wrong, open an issue with the `--examples` line (redacted as needed).
 

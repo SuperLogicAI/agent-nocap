@@ -4,7 +4,7 @@ Checks your local Claude Code / Codex history for two things:
 1. Your agent said "tests pass" / "build clean" when no passing check backed it.
 2. Failed checks that looked successful because output was piped (`npm test | tail`), which hides the exit code.
 
-**Private by design:** one ~14 KB file, Node built-ins only, no network, no install. It reads `~/.claude/projects` and `~/.codex/sessions` and prints counts. Please skim the file before running it.
+**Private by design:** one ~22 KB file, Node built-ins only, no network, no install. It reads `~/.claude/projects` and `~/.codex/sessions` and prints counts. Please skim the file before running it.
 
 ```sh
 node nocap.mjs              # last 30 days, counts only

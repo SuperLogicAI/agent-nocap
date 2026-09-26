@@ -11,19 +11,26 @@ const edit = (id: string, file_path: string) => ({ type: 'assistant', timestamp:
 const result = (id: string, content: string, is_error = false) => ({ type: 'user', timestamp: 't', message: { content: [{ type: 'tool_result', tool_use_id: id, content, is_error }] } });
 const say = (text: string) => ({ type: 'assistant', timestamp: 't', message: { content: [{ type: 'text', text }] } });
 const verdicts = (raw: string) => auditSteps('f', claudeSteps(raw)).map(c => c.verdict);
-test('claims are classified against the checks in the same turn', () => {
+test('claims are classified against the checks before them in the session', () => {
     assert.deepEqual(verdicts(jsonl(user('fix it'), edit('1', 'src/a.ts'), result('1', 'ok'), bash('2', 'npm test'), result('2', 'pass 3'), say('Done. All tests pass.'))), ['backed']);
     assert.deepEqual(verdicts(jsonl(user('fix it'), edit('1', 'src/a.ts'), result('1', 'ok'), say('Fixed, tests pass.'))), ['unbacked']);
     assert.deepEqual(verdicts(jsonl(user('fix it'), bash('2', 'npm test'), result('2', 'Exit code 1', true), say('All tests pass.'))), ['contradicted']);
     assert.deepEqual(verdicts(jsonl(user('fix it'), bash('2', 'npm test'), result('2', 'ok'), edit('3', 'src/a.ts'), result('3', 'ok'), say('All tests pass.'))), ['stale']);
     // Prose edits after a passing check do not make it stale.
     assert.deepEqual(verdicts(jsonl(user('fix it'), bash('2', 'npm test'), result('2', 'ok'), edit('3', 'README.md'), result('3', 'ok'), say('All tests pass.'))), ['backed']);
-    // A previous turn's check does not back a new claim.
-    assert.deepEqual(verdicts(jsonl(user('a'), bash('2', 'npm test'), result('2', 'ok'), user('b'), say('Tests pass.'))), ['unbacked']);
+    // An earlier turn's check still backs a restated claim until code is edited.
+    assert.deepEqual(verdicts(jsonl(user('a'), bash('2', 'npm test'), result('2', 'ok'), user('commit it'), say('Tests pass, committing.'))), ['backed']);
+    assert.deepEqual(verdicts(jsonl(user('a'), bash('2', 'npm test'), result('2', 'ok'), user('b'), edit('3', 'src/a.ts'), result('3', 'ok'), say('Tests pass.'))), ['stale']);
+    // Subagent transcripts mark every entry as sidechain; their checks still count.
+    const side = (e: object) => ({ ...e, isSidechain: true });
+    assert.deepEqual(verdicts(jsonl(side(user('run the tests')), side(bash('1', 'npm test')), side(result('1', 'ok')), side(say('All tests pass.')))), ['backed']);
 });
-test('negated, conditional and noun uses are not claims', () => {
-    for (const text of ['Tests pass? Not yet.', 'Once tests pass I will merge.', 'The tests failed; not all tests pass.', 'Recorded a live test pass for Phase 3.'])
+test('negated, conditional, partial, quoted and noun uses are not claims', () => {
+    for (const text of ['Tests pass? Not yet.', 'Once tests pass I will merge.', 'The tests failed; not all tests pass.', 'Recorded a live test pass for Phase 3.',
+        "It doesn't look like all tests pass.", 'I don’t think all tests pass.', '4/5 tests passed, one is flaky.', 'Verified the flag against the docs.',
+        'The README says "all tests pass" for 0.1.', 'Search the logs for `tests pass` first.', '```\nAll tests pass\n```'])
         assert.deepEqual(verdicts(jsonl(user('x'), say(text))), [], text);
+    assert.deepEqual(verdicts(jsonl(user('x'), bash('1', 'npm test'), result('1', 'ok'), say('I ran `npm test` and all 6 tests pass.'), say('11/11 tests pass.'))), ['backed', 'backed']);
 });
 test('exit code zero from a pipe cannot hide failing output', () => {
     const steps = claudeSteps(jsonl(user('x'), bash('1', 'cargo test 2>&1 | tail -5'), result('1', 'test result: FAILED. 14 passed; 3 failed'), say('All tests pass.')));
@@ -31,6 +38,12 @@ test('exit code zero from a pipe cannot hide failing output', () => {
     assert.equal(auditSteps('f', steps)[0]!.verdict, 'contradicted');
     const clean = claudeSteps(jsonl(bash('1', 'npm test | tail -5'), result('1', 'tests 4\npass 4\nfail 0')));
     assert.deepEqual(clean.filter(s => s.kind === 'cmd').map(s => [s.ok, s.masked]), [[true, false]]);
+    // Warnings, labels and prose are not failure output.
+    const piped = (out: string) => claudeSteps(jsonl(bash('1', 'npm run lint 2>&1 | tail'), result('1', out))).map(s => s.kind === 'cmd' && s.ok);
+    for (const out of ['✖ 5 problems (0 errors, 5 warnings)', 'passed: 151 failed: 0', 'same command failed 3+ times', 'ℹ pass 9\nℹ fail 0'])
+        assert.deepEqual(piped(out), [true], out);
+    for (const out of ['✖ 2 problems (1 error, 1 warning)', 'passed: 149 failed: 2', 'ℹ fail 1', 'Tests: 1 failed, 4 passed'])
+        assert.deepEqual(piped(out), [false], out);
 });
 test('codex exec wrappers pair commands with exit codes and patch paths', () => {
     const raw = jsonl(
@@ -42,6 +55,22 @@ test('codex exec wrappers pair commands with exit codes and patch paths', () => 
     const steps = codexSteps(raw);
     assert.deepEqual(steps.map(s => s.kind), ['user', 'edit', 'cmd', 'text']);
     assert.equal(auditSteps('f', steps)[0]!.verdict, 'contradicted');
+    const shell = codexSteps(jsonl(
+        { type: 'response_item', timestamp: 't', payload: { type: 'function_call', name: 'shell', call_id: 's', arguments: JSON.stringify({ command: ['bash', '-lc', 'npm test'] }) } },
+        { type: 'response_item', timestamp: 't', payload: { type: 'function_call_output', call_id: 's', output: '{"output":"ok","metadata":{"exit_code":0}}' } }));
+    assert.deepEqual(shell.map(s => s.kind === 'cmd' && [s.cmd, s.ok]), [['npm test', true]]);
+});
+test('codex command logs give exit codes to commands run inside scripts', () => {
+    const item = (command: string, exit_code: number, aggregated_output: string) => ({ type: 'event_msg', timestamp: 't', payload: { type: 'item_completed', item: { type: 'CommandExecution', command: ['/bin/zsh', '-lc', command], exit_code, aggregated_output } } });
+    const steps = codexSteps(jsonl(
+        { type: 'event_msg', timestamp: 't', payload: { type: 'user_message' } },
+        { type: 'response_item', timestamp: 't', payload: { type: 'custom_tool_call', name: 'exec', call_id: 'c', input: 'const r = await tools.exec_command({cmd:"npm test"}); text(r.output);' } },
+        item('npm test', 0, 'tests 4\npass 4'),
+        { type: 'response_item', timestamp: 't', payload: { type: 'custom_tool_call_output', call_id: 'c', output: 'Script completed\nOutput:\ntests 4\npass 4' } },
+        { type: 'response_item', timestamp: 't', payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'All tests pass.' }] } }));
+    assert.deepEqual(steps.filter(s => s.kind === 'cmd').map(s => [s.cmd, s.ok]), [['npm test', true]]);
+    assert.equal(auditSteps('f', steps)[0]!.verdict, 'backed');
+    assert.deepEqual(codexSteps(jsonl(item('npm test | tail -3', 0, 'Tests: 2 failed'))).map(s => s.kind === 'cmd' && [s.ok, s.masked]), [[false, true]]);
 });
 test('plugin tags come from hook context, not conversation', () => {
     const hook = (content: string) => ({ type: 'attachment', attachment: { type: 'hook_success', content } });
@@ -90,6 +119,8 @@ test('checks are recognized only where a command starts', () => {
     assert.deepEqual(checkKinds('npm test && npm run lint'), ['test', 'lint']);
     assert.deepEqual(checkKinds('node --import tsx scripts/bind-check.ts'), ['any']);
     assert.deepEqual(checkKinds('node scripts/check.mjs'), ['any']);
+    assert.deepEqual(checkKinds('npm run onboarding:check && pnpm bind-check'), ['any']);
+    for (const cmd of ['npm run format:check', 'pnpm prettier:check']) assert.deepEqual(checkKinds(cmd), [], cmd);
     assert.equal(pipefailCommand('grep -r jest . | head'), undefined);
 });
 test('a command without a completed result is not a check', () => {
@@ -105,6 +136,11 @@ test('a command without a completed result is not a check', () => {
         { type: 'response_item', timestamp: 't', payload: { type: 'custom_tool_call_output', call_id: id, output: [{ type: 'input_text', text: 'Script completed\nWall time 1.0 seconds\nOutput:\n' }, { type: 'input_text', text }] } }];
     assert.deepEqual(codexSteps(jsonl(...script('a', 'tests 4\npass 4'))).filter(s => s.kind === 'cmd'), []);
     assert.deepEqual(codexSteps(jsonl(...script('b', 'Tests: 2 failed, 5 passed'))).filter(s => s.kind === 'cmd').map(s => s.ok), [false]);
+    // Denied, rejected or hook-blocked commands never ran; only an exit code makes an error a failed run.
+    const errored = (text: string) => claudeSteps(jsonl(bash('1', 'npm test'), result('1', text, true))).map(s => s.kind === 'cmd' && s.ok);
+    for (const text of ["The user doesn't want to proceed with this tool use.", 'Permission for this action was denied by the Claude Code auto mode classifier.', 'PreToolUse:Bash hook error: blocked'])
+        assert.deepEqual(errored(text), [], text);
+    assert.deepEqual(errored('Exit code 1\n1 failed'), [false]);
 });
 test('the window counts events by time, with earlier events as context', () => {
     const dir = mkdtempSync(join(tmpdir(), 'nocap-')), at = (t: string, e: object) => ({ ...e, timestamp: t });
@@ -120,6 +156,11 @@ test('the window counts events by time, with earlier events as context', () => {
     assert.deepEqual(files.map(f => f.path), [path]);
     const a = auditFiles(files, Date.parse('2026-06-01T00:00:00Z'));
     assert.deepEqual([a.sessions, a.claims, a.verdicts.backed, a.verifications], [1, 1, 1, 0]);
+    // A session with no checks or claims is scanned but kept out of the report.
+    const oneshot = join(dir, 'oneshot.jsonl');
+    writeFileSync(oneshot, jsonl(at('2026-06-02T00:00:00Z', user('hi')), at('2026-06-02T00:00:01Z', say('Hello.'))));
+    const b = auditFiles([...files, { path: oneshot, host: 'claude' }], Date.parse('2026-06-01T00:00:00Z'));
+    assert.deepEqual([b.sessions, b.activeSessions, Object.values(b.byTags).map(g => g.sessions)], [2, 1, [1]]);
 });
 test('examples cannot write control sequences to the terminal', () => {
     const a = auditFiles([]);

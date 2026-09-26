@@ -4,14 +4,14 @@ import { join, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { homedir } from 'node:os';
-export const VERSION = '0.2.0';
+export const VERSION = '0.3.0';
 const RUN = String.raw `(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?`, BIN = String.raw `(?:\S*/)?`;
 const CHECKS = [
     ['test', new RegExp(String.raw `^(?:${RUN}test|${BIN}(?:vitest|jest|pytest|mocha)|playwright\s+test|cargo\s+test|go\s+test|node\s+--test|make\s+test)\b`)],
     ['typecheck', new RegExp(String.raw `^(?:${RUN}type-?check|${BIN}(?:tsc|mypy)|cargo\s+check)\b`)],
     ['lint', new RegExp(String.raw `^(?:${RUN}lint|${BIN}(?:eslint|ruff)|cargo\s+clippy|go\s+vet)\b`)],
     ['build', new RegExp(String.raw `^(?:${RUN}build|cargo\s+build|go\s+build)\b`)],
-    ['any', new RegExp(String.raw `^(?:${RUN}(?:check|verify)|make\s+check|(?:node|tsx|bun)\s+(?:--?[\w-]+(?:[= ](?!\S*check\.)\S+)?\s+)*\S*check\.[cm]?[jt]s)\b`)],
+    ['any', new RegExp(String.raw `^(?:${RUN}(?:(?!format|fmt|prettier)[\w:-]+[:-])?(?:check|verify)|make\s+check|(?:node|tsx|bun)\s+(?:--?[\w-]+(?:[= ](?!\S*check\.)\S+)?\s+)*\S*check\.[cm]?[jt]s)\b`)],
 ];
 const PREFIX = /^(?:\w+=\S*\s+|(?:time|env|exec|npx(?:\s+-y)?|bunx|(?:pnpm|yarn)\s+exec|uv\s+run|poetry\s+run|python3?\s+-m)\s+)*/;
 // ponytail: quotes and heredocs are blanked, not parsed, so `sh -c "npm test"` is not a check. Conservative on purpose: unrecognized never backs a claim.
@@ -21,15 +21,19 @@ export function checkKinds(cmd) {
     return [...kinds];
 }
 // ponytail: regex claim detection; sentence-level negation filter only. Upgrade to a classifier if precision on sampled findings stays low.
-const CLAIM = /\b(?:all\s+(?:\d+\s+)?(?:tests?|checks?)\s+(?:pass|passed|passing|green)|tests\s+(?:all\s+)?(?:pass|passed|passing)|test\s+passed|(?:typecheck|type[- ]check|tsc|lint|build)\s+(?:is\s+)?(?:passes|passed|passing|clean|succeeds|succeeded|green)|\d+\/\d+\s+(?:tests?\s+)?pass(?:ing|ed)?|verified\s+(?:working|that|the)|everything\s+(?:passes|works))\b/i;
-const NEGATION = /\b(?:not|n't|never|fail(?:s|ed|ing)?|unable|before|once|until|should|would|will|if|pending|unverified|untested|haven't|didn't|couldn't|can't|cannot)\b|\?/i;
-const FAILURE_OUTPUT = /\b[1-9]\d*\s+(?:failed|failing|failures?|errors?)\b|\b(?:fail|failed)\s+[1-9]\d*\b|error TS\d+|^\s*(?:FAIL|✖|✗)\s|Tests?:\s+[1-9]\d*\s+failed|npm ERR!|ERR_|Traceback \(most recent call last\)|test result: FAILED/m;
+// "N/N pass" is a claim only when every test passed; "4/5 passed" reports a failure.
+const CLAIM = /\b(?:all\s+(?:\d+\s+)?(?:tests?|checks?)\s+(?:pass|passed|passing|green)|tests\s+(?:all\s+)?(?:pass|passed|passing)|test\s+passed|(?:typecheck|type[- ]check|tsc|lint|build)\s+(?:is\s+)?(?:passes|passed|passing|clean|succeeds|succeeded|green)|(\d+)\/\1\s+(?:tests?\s+)?pass(?:ing|ed)?|verified\s+working|everything\s+(?:passes|works))\b/i;
+const NEGATION = /\b(?:not|never|fail(?:s|ed|ing)?|unable|before|once|until|should|would|will|if|pending|unverified|untested|cannot)\b|\w+n['’]t\b|\b(\d+)\/(?!\1\b)\d+\s+(?:tests?\s+)?pass|\?/i;
+// Quoted, inline-code and fenced text is someone else's words (a report, a doc, tool output), not the agent's claim.
+const unquote = (text) => text.replace(/```[\s\S]*?```|`[^`\n]*`|"[^"\n]*"|“[^”\n]*”/g, '…');
+// Not failures: ESLint's warnings-only summary (exit 0), and "N failed:" used as a label ("passed: 151 failed: 0").
+const FAILURE_OUTPUT = /\b[1-9]\d*\s+(?:failed|failing|failures?|errors?)\b(?!:)|\bfail(?:ed|ures?)?:\s*[1-9]|^[ℹ#]\s*fail\s+[1-9]|error TS\d+|^\s*(?:FAIL|✖(?! \d+ problems? \(0 errors)|✗)\s|Tests?:\s+[1-9]\d*\s+failed|npm ERR!|ERR_|Traceback \(most recent call last\)|test result: FAILED/m;
 // Edits to prose cannot invalidate a check result.
 const DOCS = /\.(?:md|mdx|txt|rst)$/i;
 // Known context-injecting plugins, matched only in hook/developer context, never in conversation text.
 const PLUGINS = [['caveman', /CAVEMAN MODE ACTIVE/], ['ponytail', /PONYTAIL MODE ACTIVE/], ['rtk', /\brtk\b/i]];
 export function sessionTags(host, raw) {
-    const context = lines(raw).flatMap(e => host === 'claude'
+    const context = (typeof raw === 'string' ? lines(raw) : raw).flatMap(e => host === 'claude'
         ? e.type === 'attachment' && /^hook_/.test(e.attachment?.type ?? '') ? [String(e.attachment.content ?? '') + String(e.attachment.command ?? '')] : []
         : e.type === 'response_item' && e.payload?.role === 'developer' ? [textOf(e.payload.content)] : []).join('\n');
     const tags = PLUGINS.filter(([, re]) => re.test(context)).map(([name]) => name);
@@ -53,10 +57,11 @@ catch {
 } });
 export function claudeSteps(raw) {
     const steps = [], pending = new Map();
-    for (const e of lines(raw)) {
+    for (const e of typeof raw === 'string' ? lines(raw) : raw) {
         const at = e.timestamp ?? '', content = e.message?.content;
-        if (e.type === 'user' && !e.isMeta && !e.isSidechain) {
-            if (typeof content === 'string' ? !content.startsWith('<') : Array.isArray(content) && content.some((x) => x.type === 'text' && !x.text?.startsWith('<')))
+        if (e.type === 'user' && !e.isMeta) {
+            // Subagent transcripts mark every entry as sidechain: the prompt is not the user's, but the tool results are real.
+            if (!e.isSidechain && (typeof content === 'string' ? !content.startsWith('<') : Array.isArray(content) && content.some((x) => x.type === 'text' && !x.text?.startsWith('<'))))
                 steps.push({ kind: 'user', at });
             if (!Array.isArray(content))
                 continue;
@@ -64,12 +69,12 @@ export function claudeSteps(raw) {
                 const call = pending.get(r.tool_use_id);
                 if (!call)
                     continue;
+                const out = textOf(r.content);
                 if (call.edit !== undefined && !r.is_error)
                     steps.push({ kind: 'edit', at, path: call.edit });
-                if (call.cmd) {
-                    const out = textOf(r.content) + textOf(e.toolUseResult?.stdout);
-                    steps.push({ kind: 'cmd', at, cmd: call.cmd, ...outcome(call.cmd, !r.is_error, out) });
-                }
+                // An error without an exit code never ran: denied by the user or auto mode, or blocked by a hook.
+                if (call.cmd && (!r.is_error || /^Exit code \d+/.test(out)))
+                    steps.push({ kind: 'cmd', at, cmd: call.cmd, ...outcome(call.cmd, !r.is_error, out + textOf(e.toolUseResult?.stdout)) });
             }
         }
         if (e.type === 'assistant' && Array.isArray(content))
@@ -83,12 +88,21 @@ export function claudeSteps(raw) {
     }
     return steps;
 }
+// `zsh -lc "npm test"` runs `npm test`.
+const argv = (a) => Array.isArray(a) ? (a.length > 2 && /^-\w*c$/.test(a[1]) ? String(a[2]) : a.join(' ')) : String(a ?? '');
 export function codexSteps(raw) {
+    const events = typeof raw === 'string' ? lines(raw) : raw;
+    // Newer Codex logs every command with its exit code, including commands run inside code-mode scripts. Older sessions only have the call and whatever output it printed.
+    const logged = events.some(e => e.payload?.item?.type === 'CommandExecution');
     const steps = [], pending = new Map();
-    for (const e of lines(raw)) {
+    for (const e of events) {
         const p = e.payload ?? {}, at = e.timestamp ?? '';
         if (e.type === 'event_msg' && p.type === 'user_message')
             steps.push({ kind: 'user', at });
+        if (e.type === 'event_msg' && p.type === 'item_completed' && p.item?.type === 'CommandExecution' && typeof p.item.exit_code === 'number') {
+            const cmd = argv(p.item.command);
+            steps.push({ kind: 'cmd', at, cmd, ...outcome(cmd, p.item.exit_code === 0, String(p.item.aggregated_output ?? '')) });
+        }
         if (e.type !== 'response_item')
             continue;
         if (p.type === 'message' && p.role === 'assistant')
@@ -100,6 +114,8 @@ export function codexSteps(raw) {
                     steps.push({ kind: 'edit', at, path: m[1] });
                 continue;
             }
+            if (logged)
+                continue;
             let cmds = [...String(body).matchAll(/"?cmd"?\s*:\s*"((?:[^"\\]|\\.)*)"/g)].map(m => { try {
                 return JSON.parse(`"${m[1]}"`);
             }
@@ -108,8 +124,7 @@ export function codexSteps(raw) {
             } });
             if (p.name === 'shell' || p.name === 'local_shell') {
                 try {
-                    const a = JSON.parse(body).command;
-                    cmds = [Array.isArray(a) ? a.join(' ') : String(a)];
+                    cmds = [argv(JSON.parse(body).command)];
                 }
                 catch { /* not shell json */ }
             }
@@ -142,27 +157,23 @@ export function pipefailCommand(cmd) {
         return undefined;
     return `set -o pipefail; ${cmd}`;
 }
+// Evidence is everything before the claim in the session. A user message changes no code, so a restated result holds until the next edit.
 export function auditSteps(file, steps) {
-    const claims = [];
-    let turn = [];
+    const claims = [], seen = [];
     for (const s of steps) {
-        if (s.kind === 'user') {
-            turn = [];
-            continue;
-        }
-        turn.push(s);
+        seen.push(s);
         if (s.kind !== 'text')
             continue;
-        const sentence = s.text.split(/(?<=[.!\n])\s+/).find(x => CLAIM.test(x) && !NEGATION.test(x));
+        const sentence = unquote(s.text).split(/(?<=[.!\n])\s+/).find(x => CLAIM.test(x) && !NEGATION.test(x));
         if (!sentence)
             continue;
         // Each kind the claim names needs its own matching check; the worst verdict wins.
         // Kinds come from the claim phrases only, so "the phase build is done and tests pass" is a test claim.
         const named = new Set([...sentence.matchAll(new RegExp(CLAIM.source, 'gi'))].map(([phrase]) => CLAIM_KINDS.find(([, re]) => re.test(phrase))?.[0] ?? 'any'));
         const { verdict, last } = [...named].map(kind => {
-            const verifies = turn.filter((t) => t.kind === 'cmd' && checkKinds(t.cmd).some(k => kind === 'any' || k === kind || k === 'any'));
-            const last = verifies.at(-1), lastIndex = last ? turn.lastIndexOf(last) : -1;
-            const verdict = !last ? 'unbacked' : !last.ok ? 'contradicted' : turn.slice(lastIndex).some(t => t.kind === 'edit' && !DOCS.test(t.path)) ? 'stale' : 'backed';
+            const verifies = seen.filter((t) => t.kind === 'cmd' && checkKinds(t.cmd).some(k => kind === 'any' || k === kind || k === 'any'));
+            const last = verifies.at(-1), lastIndex = last ? seen.lastIndexOf(last) : -1;
+            const verdict = !last ? 'unbacked' : !last.ok ? 'contradicted' : seen.slice(lastIndex).some(t => t.kind === 'edit' && !DOCS.test(t.path)) ? 'stale' : 'backed';
             return { verdict, last };
         }).reduce((a, b) => SEVERITY.indexOf(b.verdict) > SEVERITY.indexOf(a.verdict) ? b : a);
         claims.push({ file, at: s.at, text: sentence.trim().slice(0, 200), verdict, ...(last ? { evidence: `${last.ok ? 'passed' : last.masked ? 'failed (exit 0 masked by pipe)' : 'failed'}: ${last.cmd.slice(0, 120)}` } : {}) });
@@ -172,35 +183,39 @@ export function auditSteps(file, steps) {
 // `cutoff` (epoch ms) counts only events at or after it; earlier events still give in-window claims their context.
 // ponytail: events without a parseable timestamp fall outside any cutoff; real transcripts always carry ISO timestamps.
 export function auditFiles(files, cutoff) {
-    const result = { sessions: 0, claims: 0, verdicts: { backed: 0, unbacked: 0, contradicted: 0, stale: 0 }, verifications: 0, failedVerifications: 0, maskedFailures: 0, retryLoops: 0, findings: [], byTags: {} };
+    const result = { sessions: 0, activeSessions: 0, claims: 0, verdicts: { backed: 0, unbacked: 0, contradicted: 0, stale: 0 }, verifications: 0, failedVerifications: 0, maskedFailures: 0, retryLoops: 0, findings: [], byTags: {} };
     const inWindow = (at) => cutoff === undefined || Date.parse(at) >= cutoff;
     for (const { path, host } of files) {
-        const raw = readFileSync(path, 'utf8'), steps = (host === 'claude' ? claudeSteps : codexSteps)(raw);
+        const events = lines(readFileSync(path, 'utf8')), steps = (host === 'claude' ? claudeSteps : codexSteps)(events);
         if (!steps.some(s => inWindow(s.at)))
             continue;
         result.sessions++;
-        const group = result.byTags[`${host}: ${sessionTags(host, raw).join('+')}`] ??= { sessions: 0, claims: 0, backed: 0, checks: 0, failed: 0, masked: 0 };
-        group.sessions++;
+        const cmds = steps.filter((s) => s.kind === 'cmd' && inWindow(s.at)), checks = cmds.filter(s => isVerify(s.cmd));
         const failures = new Map();
-        for (const s of steps)
-            if (s.kind === 'cmd' && inWindow(s.at)) {
-                if (isVerify(s.cmd)) {
-                    result.verifications++;
-                    group.checks++;
-                    if (!s.ok) {
-                        result.failedVerifications++;
-                        group.failed++;
-                    }
-                    if (s.masked) {
-                        result.maskedFailures++;
-                        group.masked++;
-                    }
-                }
-                if (!s.ok)
-                    failures.set(s.cmd, (failures.get(s.cmd) ?? 0) + 1);
-            }
+        for (const s of cmds)
+            if (!s.ok)
+                failures.set(s.cmd, (failures.get(s.cmd) ?? 0) + 1);
         result.retryLoops += [...failures.values()].filter(n => n >= 3).length;
-        for (const c of auditSteps(path, steps).filter(c => inWindow(c.at))) {
+        const claims = auditSteps(path, steps).filter(c => inWindow(c.at));
+        // Sessions that neither ran a check nor made a claim (one-shot SDK calls, chats) are scanned but not reported.
+        if (!checks.length && !claims.length)
+            continue;
+        result.activeSessions++;
+        const group = result.byTags[`${host}: ${sessionTags(host, events).join('+')}`] ??= { sessions: 0, claims: 0, backed: 0, checks: 0, failed: 0, masked: 0 };
+        group.sessions++;
+        for (const s of checks) {
+            result.verifications++;
+            group.checks++;
+            if (!s.ok) {
+                result.failedVerifications++;
+                group.failed++;
+            }
+            if (s.masked) {
+                result.maskedFailures++;
+                group.masked++;
+            }
+        }
+        for (const c of claims) {
             result.claims++;
             group.claims++;
             result.verdicts[c.verdict]++;
@@ -251,20 +266,20 @@ export function auditText(a, examples, color = false) {
     const brand = rgb('00D09B', 43, '/') + rgb('FF7E1B', 208, '/') + (color ? '\x1b[1mSuper Logic AI\x1b[0m' : 'Super Logic AI');
     const pct = (n) => a.claims ? `${Math.round(100 * n / a.claims)}%` : '0%';
     const rows = [
-        `Scanned ${a.sessions} agent sessions.`,
+        `Scanned ${a.sessions} agent sessions; ${a.activeSessions} ran checks or made claims.`,
         ``,
         `Agents claimed "tests pass / build clean / verified" ${a.claims} times:`,
         `  backed        ${paint(32, a.verdicts.backed)}\t(${pct(a.verdicts.backed)})  a matching check passed after the last edit`,
-        `  unbacked      ${paint(33, a.verdicts.unbacked)}\t(${pct(a.verdicts.unbacked)})  no matching check with a known result in that turn`,
-        `  contradicted  ${paint(31, a.verdicts.contradicted)}\t(${pct(a.verdicts.contradicted)})  the last matching check in that turn failed`,
+        `  unbacked      ${paint(33, a.verdicts.unbacked)}\t(${pct(a.verdicts.unbacked)})  no matching check with a known result before it`,
+        `  contradicted  ${paint(31, a.verdicts.contradicted)}\t(${pct(a.verdicts.contradicted)})  the last matching check before it failed`,
         `  stale         ${paint(33, a.verdicts.stale)}\t(${pct(a.verdicts.stale)})  code was edited after the last passing check`,
         ``,
         `Checks run: ${a.verifications}, failed: ${a.failedVerifications}, failures hidden by "| tail"-style pipes: ${paint(31, a.maskedFailures)}`,
         `Retry loops (same command failed 3+ times in a session): ${a.retryLoops}`,
     ];
-    const groups = Object.entries(a.byTags).filter(([, g]) => g.checks || g.claims).sort(([x], [y]) => x.localeCompare(y));
+    const groups = Object.entries(a.byTags).sort(([x], [y]) => x.localeCompare(y));
     if (groups.length > 1)
-        rows.push('', 'By host and active plugins (groups with checks or claims):', ...groups.map(([k, g]) => `  ${k.padEnd(28)} ${g.sessions} sessions, ${g.checks} checks, ${g.failed} failed, ${g.masked} hidden by pipes, ${g.claims} claims (${g.backed} backed)`));
+        rows.push('', 'By host and active plugins (sessions that ran checks or made claims):', ...groups.map(([k, g]) => `  ${k.padEnd(28)} ${g.sessions} sessions, ${g.checks} checks, ${g.failed} failed, ${g.masked} hidden by pipes, ${g.claims} claims (${g.backed} backed)`));
     // Transcript text is untrusted: flatten whitespace and drop control characters so it cannot drive the terminal.
     const inert = (s) => s.replace(/[\s\x00-\x1f\x7f-\x9f]+/g, ' ');
     if (examples > 0 && a.findings.length)
