@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="look-what-i-can-do.svg" width="800" alt="agent-nocap 🧢: Your coding agent said &quot;all tests pass.&quot; Was that cap?">
+<img src="look-what-i-can-do.svg" width="800" alt="agent-nocap 🧢: Your coding agent said &quot;all tests pass.&quot; Was that cap?">
 </p>
 
 # agent-nocap 🧢
